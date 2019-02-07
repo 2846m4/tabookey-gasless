@@ -6,6 +6,8 @@ const localhostOne = "http://localhost:8090"
 const ethUtils = require('ethereumjs-util');
 const ethJsTx = require('ethereumjs-tx');
 
+const RelayServer = require( '../src/js/relay/relayserver')
+
 const zeroAddr = "0".repeat(40)
 
 module.exports = {
@@ -17,56 +19,81 @@ module.exports = {
     //  stake, delay, txfee, url, relayOwner: parameters to pass to register_new_relay, to stake and register it.
     //  
     startRelay: async function (rhub, options) {
-        let server = __dirname + "/../build/server/bin/RelayHttpServer"
 
-        options = options || {}
-        let args = []
-        args.push( "-Workdir", "./build/server" )
-        args.push( "-ShortSleep" )
-        if ( rhub ) {
-            args.push("-RelayHubAddress", rhub.address)
+        let proc
+        let serverUrl = options.url || localhostOne
+
+        if ( options.useJavaScriptServer ) {
+            let jserv = new RelayServer({
+                RelayHubAddress : rhub.address,
+                EthereumNodeUrl : options.EthereumNodeUrl,
+                GasPricePercent : options.GasPricePercent,
+                Url : serverUrl,
+                ShortSleep:true,
+                KeyFile : "/dev/null"   //force new key on each run
+
+            } )
+            proc = { kill: ()=>jserv.stop() }
+
+        } else {
+
+            let server = __dirname + "/../build/server/bin/RelayHttpServer"
+
+            options = options || {}
+            let args = []
+            args.push("-Workdir", "./build/server")
+            args.push("-ShortSleep")
+            if (rhub) {
+                args.push("-RelayHubAddress", rhub.address)
+            }
+            if (options.EthereumNodeUrl) {
+                args.push("-EthereumNodeUrl", options.EthereumNodeUrl)
+            }
+            if (options.GasPricePercent) {
+                args.push("-GasPricePercent", options.GasPricePercent)
+            }
+            if (options.url) {
+                args.push("-Url", options.url)
+            }
+
+            child_process.execSync("pkill RelayHttpServer|| echo 'no previous relay' ")
+            let proc = child_process.spawn(server, args)
+
+            let relaylog = function () {
+            }
+            if (process.env.relaylog)
+                relaylog = (msg) => msg.split("\n").forEach(line => console.log("relay-" + proc.pid + "> " + line))
+
+            await new Promise((resolve, reject) => {
+
+                let lastresponse
+                let listener = data => {
+                    let str = data.toString().replace(/\s+$/, "")
+                    lastresponse = str
+                    relaylog(str)
+                    if (str.indexOf("Listening on port") >= 0) {
+                        proc.alreadystarted = 1
+                        resolve(proc)
+                    }
+                };
+                proc.stdout.on('data', listener)
+                proc.stderr.on('data', listener)
+                let doaListener = (code) => {
+                    if (!this.alreadystarted) {
+                        relaylog("died before init code=" + code)
+                        reject(lastresponse)
+                    }
+                };
+                proc.on('exit', doaListener.bind(proc))
+            })
+
         }
-        if (options.EthereumNodeUrl) {
-            args.push("-EthereumNodeUrl", options.EthereumNodeUrl)
-        }
-        if (options.GasPricePercent) {
-            args.push("-GasPricePercent", options.GasPricePercent)
-        }
-        let proc = child_process.spawn(server, args)
-
-        let relaylog=function(){}
-        if ( process.env.relaylog )
-            relaylog = (msg)=> msg.split("\n").forEach(line=>console.log("relay-"+proc.pid+"> "+line))
-
-        await new Promise((resolve, reject) => {
-
-            let lastresponse
-            let listener = data => {
-                let str = data.toString().replace(/\s+$/, "")
-                lastresponse = str
-                relaylog(str)
-                if (str.indexOf("Listening on port") >= 0) {
-                    proc.alreadystarted = 1
-                    resolve(proc)
-                }
-            };
-            proc.stdout.on('data', listener)
-            proc.stderr.on('data', listener)
-            let doaListener = (code) => {
-                if (!this.alreadystarted) {
-                    relaylog("died before init code="+code)
-                    reject(lastresponse)
-                }
-            };
-            proc.on('exit', doaListener.bind(proc))
-        })
-
         let res
         let http = new HttpWrapper(web3)
         let count1=3
         while (count1-- > 0 ) {
             try {
-                res = await http.sendPromise(localhostOne + '/getaddr')
+                res = await http.sendPromise(serverUrl + '/getaddr')
                 if ( res ) break
             } catch(e) {
                 console.log( "startRelay getaddr error", e)
@@ -84,9 +111,9 @@ module.exports = {
         res=""
         let count = 25
         while (count-- > 0) {
-            res = await http.sendPromise(localhostOne+'/getaddr')
+            res = await http.sendPromise(serverUrl+'/getaddr')
             if ( res && res.Ready ) break;
-            await module.exports.sleep(1500)
+            await module.exports.sleep(500)
         }
         assert.ok(res.Ready, "Timed out waiting for relay to get staked and registered")
 

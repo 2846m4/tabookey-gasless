@@ -41,10 +41,10 @@ options.forEach(params => {
                 // rhub = await RelayHub.deployed()
                 rhub = await RelayHub.new()
                 relayproc = await testutils.startRelay(rhub, {
-                    stake: 1e12,
+                    stake: 1e18,
                     delay: 3600,
                     txfee: 12,
-                    url: "asd",
+                    url: "http://localhost:8092",
                     relayOwner: accounts[0],
                     EthereumNodeUrl: web3.currentProvider.host,
                     GasPricePercent:gasPricePercent

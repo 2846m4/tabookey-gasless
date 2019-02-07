@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+
+RunRelay = require( '../src/js/relay/RunRelay' )
+
+RunRelay(process.argv)

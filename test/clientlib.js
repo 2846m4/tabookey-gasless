@@ -45,14 +45,15 @@ contract('RelayClient', function (accounts) {
         console.log("starting relay")
 
         relayproc = await testutils.startRelay(rhub, {
-            stake: 1e12, delay: 3600, txfee: 12, url: "asd", relayOwner: accounts[0], EthereumNodeUrl: web3.currentProvider.host,GasPricePercent:gasPricePercent})
+            stake: 1e18, delay: 3600, txfee: 12, url: "http://localhost:8090", relayOwner: accounts[0], EthereumNodeUrl: web3.currentProvider.host,GasPricePercent:gasPricePercent})
 
     });
 
     after(async function () {
         await testutils.stopRelay(relayproc)
         //disable relay, so it won't interfere with other tests..
-        relay_client_config.enableRelay=false
+        if (relay_client_config)
+            relay_client_config.enableRelay=false
     })
 
     it("test balanceOf target contract", async () => {
@@ -220,7 +221,7 @@ contract('RelayClient', function (accounts) {
                 }
                 else {
                     let callback_wrap = function (e, r) {
-                        assert.equal(null, e)
+                        assert.equal(null, e, "should not fail: "+JSON.stringify(e))
                         assert.equal(true, r.input.includes(message_hex))
                         callback(e, r)
                     }

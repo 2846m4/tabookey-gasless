@@ -31,6 +31,13 @@ function bytesToHex_noPrefix(bytes) {
 }
 
 module.exports = {
+
+    zeroAddr,
+
+    sleep : function(ms) {
+        return new Promise((resolve)=>setTimeout(resolve,ms))
+    },
+
     register_new_relay: async function (relayHub, stake, delay, txFee, url, account) {
         await relayHub.stake(account, delay, {from: account, value: stake})
         return await relayHub.register_relay(txFee, url, zeroAddr, {from: account})
