@@ -1,5 +1,5 @@
-const http = require('http')
-const https = require('https')
+const express = require('express')
+const greenlock_express = require('greenlock-express')
 const url = require('url')
 const fs = eval("require('fs')")
 const Web3 = require('web3')
@@ -12,7 +12,6 @@ const ethTx = require('ethereumjs-tx');
 // function trace() {
 //     console.log(new Error().stack.match(/trace.*\n.*?(\d+)/ )[1])
 // }
-
 
 //client looks up 6000 blocks back for a RelayAdded. we refresh little bit faster
 const lookup_limit_blocks = 6000 - 100
@@ -84,31 +83,43 @@ class RelayServer {
 
         this.rhub = new this.web3.eth.Contract(RelayHubApi, options.RelayHubAddress)
 
-        let defaultPort
-        let createServer
-        if (options.Url.startsWith("https")) {
-            createServer = https.createServer
-            defaultPort = 443
-            if ( options.HttpsCert ) {
-                let certfile = fs.readFileSync(options.HttpsCert).toString()
-                options.key = certfile.match(/(---*\s*BEGIN PRIVATE[\s\S]*?---*\s*END PRIVATE.*)/)[1]
-                options.cert = certfile.match(/(---*\s*BEGIN CERT[\s\S]*---*\s*END CERT.*)/)[1]
-            } else {
-                console.error( "Missing \"-KeyFile\" when using https" )
-                process.exit(1)
-            }
-        } else {
-            createServer = http.createServer
-            defaultPort = 80
-        }
+        let defaultPort = options.Url.startsWith("https") ? 443 : 80
+
         let port = options.Port || url.parse(options.Url).port || defaultPort
+
+        let hostname = url.parse(options.Url).hostname
+
 
         // if (options.key)
         //     options.key = fs.readFileSync(options.key)
         // if (options.cert)
         //     options.cert = fs.readFileSync(options.cert)
-        this.server = createServer(options, this.httpRequestHandler.bind(this))
-        this.server.listen(port)
+        // this.server = createServer(options, this.httpRequestHandler.bind(this))
+        this.init_server()
+        if ( options.Greenlock && options.Url.startsWith("https") )
+            if ( !hostname.match(/^[a-z][\w.]*\.[\w.]*[a-z]$/ ) ) {
+                //valid hostname is must contains dots, and not be all numbers.
+                console.log( "not a valid fully qualified hostname. cannot request certificate ", hostname)
+            } else {
+                //wrap our server with certificate-creator service
+                let certsDir = (options.WorkDir || ".") + "/certs"
+                try { fs.mkdirSync(certsDir) } catch (e) {}
+                this.server = greenlock_express.create({
+                    approvedDomains: [hostname],
+                    version: 'draft-11',
+                    server: 'https://acme-v02.api.letsencrypt.org/directory',
+
+                    email: "greenlock.user@gmail.com",
+                    agreeTos: true,
+                    configDir: certsDir,
+                    communityMember: false,
+                    app: this.server,
+                    //debug: true,
+                })
+            }
+        console.log( "Listening on ",port)
+        let srv = this.server.listen(port)
+        this.server.close = srv.close.bind(srv)
 
         this.sleepTimeSec = this.options.SleepTime || (this.options.ShortSleep ? 1 : 60)
         serverLog("Started relay", this.relayAddr, "url=" + this.options.Url, "listen port", port, "update interval=",this.sleepTimeSec)
@@ -194,6 +205,27 @@ class RelayServer {
         return "ok"
     }
 
+    init_server() {
+        this.server = express()
+        this.server.use(function(req, res, next) {
+            res.header('Access-Control-Allow-Origin', '*');
+            res.header('Access-Control-Allow-Methods', 'GET, PUT, POST, DELETE, OPTIONS');
+            res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Content-Length, X-Requested-With');
+
+            //intercepts OPTIONS method
+            if ('OPTIONS' === req.method) {
+                //respond with 200
+                res.send(200);
+            }
+            else {
+                //move on
+                next();
+            }
+        });
+
+        this.server.use( "/getaddr", this.handle_getaddr.bind(this) )
+        this.server.post( "/relay", this.handle_relay.bind(this) )
+    }
 
     async httpRequestHandler(req, resp) {
         if (req.method === 'OPTIONS')
@@ -254,7 +286,7 @@ class RelayServer {
             throw new Error("can_relay returned: " + res)
 
         try {
-            let reserve = parseInt(await rhub.get_gas_reserve().call());
+            let reserve = parseInt(await rhub.gas_reserve().call());
 
             let gasLimit = r.gasLimit + reserve * 10;
 

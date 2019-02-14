@@ -1,11 +1,11 @@
 const RelayServer = require('./relayserver')
 
 const options = {
-    "HttpsCert" :{  //this is the only "new" option, not originated from go server..
-        help: "PEM file of key and certifcates for an https server",
-        def : "server.pem"
+    "Greenlock" : {
+        help: "Use 'greenlock' to automatically apply for https certificate",
+        def : true
     },
-    "SleepTime": { help:"sleep time between checks. 0 to disable background sleep (and check on each http call)"},
+    "SleepTime": { help:"sleep time between checks. 0 to disable background sleep (and check on each http call)" },
     "EthereumNodeUrl" :{
         help:"The relay's ethereum node",
         def:"http://localhost:8545"
@@ -60,7 +60,7 @@ function usage(msg) {
     console.error("Usage: ")
     for (let name in options) {
         let opt = options[name]
-        console.log("  " + name)
+        console.log("  -" + name)
         console.log("\t" + opt.help, opt.def ? "(default " + opt.def + ")" : "")
     }
     process.exit(1)

@@ -23,7 +23,7 @@ module.exports = {
         let proc
         let serverUrl = options.url || localhostOne
 
-        if ( options.useJavaScriptServer ) {
+        if ( true || options.useJavaScriptServer ) {
             let jserv = new RelayServer({
                 RelayHubAddress : rhub.address,
                 EthereumNodeUrl : options.EthereumNodeUrl,
