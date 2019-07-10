@@ -46,7 +46,11 @@ module.exports = {
     }
   },
   mocha: {
-      slow: 1000
+      slow: 1000,
+      reporter: 'mocha-multi-reporters',
+      reporterOptions: {
+      configFile: './mocha-reporter-config.json',
+      },
   },
   compilers: {
     solc: {

@@ -63,7 +63,7 @@ jobs: # a collection of steps
           path: ./coverage.html
 
       - store_test_results: # special step to upload test results for display in Test Summary
-          path: /tmp/test-results.log
+          path: test-results
 
 #too much noise..
 #notify:
