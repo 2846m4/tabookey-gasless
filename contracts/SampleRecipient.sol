@@ -104,7 +104,14 @@ contract SampleRecipient is RelayRecipient, Ownable {
         blacklisted = addr;
     }
 
-    function acceptRelayedCall(address relay, address from, bytes memory /*encodedFunction*/, uint /*gasPrice*/, uint /*transactionFee*/ , bytes memory /*signature*/, bytes memory approvalData) public view returns(uint) {
+    function acceptRelayedCall(address relay, address from, bytes memory encodedFunction, uint gasPrice, uint transactionFee, uint gasLimit, bytes memory approvalData) public view returns (bytes memory) {
+        uint ret = acceptRelayedCall1(relay,from,encodedFunction, gasPrice, transactionFee, gasLimit, approvalData);
+        if ( ret!=0 )
+            revert("acr failed");
+        return bytes("ctx");
+    }
+
+    function acceptRelayedCall1(address relay, address from, bytes memory /*encodedFunction*/, uint /*gasPrice*/, uint /*transactionFee*/ , uint /*gasLimit*/, bytes memory approvalData) public view returns(uint) {
         // The factory accepts relayed transactions from anyone, so we whitelist our own relays to prevent abuse.
         // This protection only makes sense for contracts accepting anonymous calls, and therefore not used by Gatekeeper or Multisig.
         // May be protected by a user_credits map managed by a captcha-protected web app or association with a google account.
@@ -143,8 +150,8 @@ contract SampleRecipient is RelayRecipient, Ownable {
     }
 
     event SampleRecipientPreCall();
+    function preRelayedCall(bytes memory context) public returns (bytes memory) {
 
-    function preRelayedCall(address /*relay*/, address /*from*/, bytes memory /*encodedFunction*/, uint /*transactionFee*/) public returns (bytes32) {
         if (withdrawDuringPreRelayedCall) {
             withdrawAllBalance();
         }
@@ -154,12 +161,16 @@ contract SampleRecipient is RelayRecipient, Ownable {
         if (revertPreRelayCall){
             revert("You asked me to revert, remember?");
         }
-        return bytes32(uint(123456));
+        return abi.encodePacked(context, "-extra");
     }
 
     event SampleRecipientPostCall(uint usedGas, bytes32 preRetVal);
 
-    function postRelayedCall(address /*relay*/ , address /*from*/, bytes memory /*encodedFunction*/, bool /*success*/, uint usedGas, uint transactionFee, bytes32 preRetVal) public {
+    function postRelayedCall(bytes memory context, bool success, uint usedGas) public {
+        postRelayedCall(address(0)/*relay*/ , address(0) /*from*/, context/*encodedFunction*/, success, usedGas, 0, 0);
+    }
+
+    function postRelayedCall(address /*relay*/ , address /*from*/, bytes memory /*encodedFunction*/, bool /*success*/, uint usedGas, uint transactionFee, bytes32 preRetVal) internal {
         if (withdrawDuringPostRelayedCall) {
             withdrawAllBalance();
         }

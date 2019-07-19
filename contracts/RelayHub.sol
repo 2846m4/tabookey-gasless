@@ -201,38 +201,58 @@ contract RelayHub is IRelayHub {
         bytes memory signature,
         bytes memory approvalData
     )
-    public view returns (uint256)
+    public view returns (uint256 status) {
+        (status,) = canRelayInternal(relay,from,to,encodedFunction, transactionFee, gasPrice, gasLimit, nonce, signature, approvalData);
+        //ignore context bytes..
+    }
+
+    function canRelayInternal(
+        address relay,
+        address from,
+        address to,
+        bytes memory encodedFunction,
+        uint256 transactionFee,
+        uint256 gasPrice,
+        uint256 gasLimit,
+        uint256 nonce,
+        bytes memory signature,
+        bytes memory approvalData
+    )
+    public view returns (uint retstatus, bytes memory retcontext)
     {
         // Verify the sender's signature on the transaction - note that approvalData is *not* signed
         bytes memory packed = abi.encodePacked("rlx:", from, to, encodedFunction, transactionFee, gasPrice, gasLimit, nonce, address(this));
         bytes32 hashedMessage = keccak256(abi.encodePacked(packed, relay));
 
         if (hashedMessage.toEthSignedMessageHash().recover(signature) != from) {
-            return uint256(PreconditionCheck.WrongSignature);
+            return ( uint256(PreconditionCheck.WrongSignature), new bytes(0));
         }
 
         // Verify the transaction is not being repalyed
         if (nonces[from] != nonce) {
-            return uint256(PreconditionCheck.WrongNonce);
+            return ( uint256(PreconditionCheck.WrongNonce), new bytes(0));
         }
 
         bytes memory encodedTx = abi.encodeWithSelector(IRelayRecipient(to).acceptRelayedCall.selector,
-            relay, from, encodedFunction, gasPrice, transactionFee, signature, approvalData
+            relay, from, encodedFunction, gasPrice, transactionFee, gasLimit, approvalData,0
         );
 
         (bool success, bytes memory returndata) = to.staticcall.gas(acceptRelayedCallMaxGas)(encodedTx);
 
         if (!success) {
-            return uint256(PreconditionCheck.AcceptRelayedCallReverted);
+            return ( uint256(PreconditionCheck.AcceptRelayedCallReverted), new bytes(0));
+
         } else {
-            uint256 accept = abi.decode(returndata, (uint256));
+            //TODO: we don't get status from ACR. need to use revert reason.
+            uint256 accept=0;
+            retcontext = abi.decode(returndata, (bytes));
 
             // This can be either PreconditionCheck.OK or a custom error code
             if ((accept == 0) || (accept > 10)) {
-                return accept;
+                return (accept, retcontext);
             } else {
                 // Error codes [1-10] are reserved to RelayHub
-                return uint256(PreconditionCheck.InvalidRecipientStatusCode);
+                return ( uint256(PreconditionCheck.InvalidRecipientStatusCode), new bytes(0));
             }
         }
     }
@@ -284,15 +304,15 @@ contract RelayHub is IRelayHub {
         // for the maximum possible charge.
         require(gasPrice * initialGas <= balances[recipient], "Recipient balance too low");
 
-        bytes4 functionSelector = LibBytes.readBytes4(encodedFunction, 0);
-
+        bytes memory context;
         {
+            uint256 preconditionCheck;
             // We now verify the legitimacy of the transaction (it must be signed by the sender, and not be replayed),
             // and that the recpient will accept to be charged by it.
-            uint256 preconditionCheck = canRelay(msg.sender, from, recipient, encodedFunction, transactionFee, gasPrice, gasLimit, nonce, signature, approvalData);
+            (preconditionCheck,context) = canRelayInternal(msg.sender, from, recipient, encodedFunction, transactionFee, gasPrice, gasLimit, nonce, signature, approvalData);
 
             if (preconditionCheck != uint256(PreconditionCheck.OK)) {
-                emit CanRelayFailed(msg.sender, from, recipient, functionSelector, preconditionCheck);
+                emit CanRelayFailed(msg.sender, from, recipient, LibBytes.readBytes4(encodedFunction, 0), preconditionCheck);
                 return;
             }
         }
@@ -306,8 +326,9 @@ contract RelayHub is IRelayHub {
         // Calls to the recipient are performed atomically inside an inner transaction which may revert in case of
         // errors in the recipient. In either case (revert or regular execution) the return data encodes the
         // RelayCallStatus value.
-        (, bytes memory relayCallStatus) = address(this).call(abi.encodeWithSelector(this.recipientCallsAtomic.selector, from, recipient, msg.sender, encodedFunction, transactionFee, gasLimit, initialGas));
-        RelayCallStatus status = abi.decode(relayCallStatus, (RelayCallStatus));
+        (, bytes memory relayCallStatus) = address(this).call(abi.encodeWithSelector(this.recipientCallsAtomic.selector,
+            recipient, abi.encodePacked(encodedFunction,from),
+            gasLimit, initialGas, context));
 
         // Regardless of the outcome of the relayed transaction, the recipient is now charged.
         uint256 charge = getChargedAmount(gasOverhead + initialGas - gasleft(), gasPrice, transactionFee);
@@ -318,7 +339,10 @@ contract RelayHub is IRelayHub {
         balances[recipient] -= charge;
         balances[relays[msg.sender].owner] += charge;
 
-        emit TransactionRelayed(msg.sender, from, recipient, functionSelector, status, charge);
+        emit TransactionRelayed(msg.sender, from, recipient,
+            LibBytes.readBytes4(encodedFunction, 0),
+            abi.decode(relayCallStatus, (RelayCallStatus)),
+            charge);
     }
 
     function getChargedAmount(uint256 gas, uint256 gasPrice, uint256 fee) private pure returns (uint256) {
@@ -329,13 +353,11 @@ contract RelayHub is IRelayHub {
     }
 
     function recipientCallsAtomic(
-        address from,
         address recipient,
-        address relayAddr,
-        bytes calldata encodedFunction,
-        uint256 transactionFee,
+        bytes calldata encodedFunctionWithFrom,
         uint256 gasLimit,
-        uint256 initialGas
+        uint256 initialGas,
+        bytes calldata context
     )
     external
     returns (RelayCallStatus)
@@ -353,12 +375,11 @@ contract RelayHub is IRelayHub {
 
         // First preRelayedCall is executed.
         // It is the recipient's responsability to ensure, in acceptRelayedCall, that this call will not revert.
-        bytes32 preReturnValue;
+        bytes memory preReturnValue;
         {
             // Note: we open a new block to avoid growing the stack too much.
             bytes memory data = abi.encodeWithSelector(
-                IRelayRecipient(recipient).preRelayedCall.selector,
-                relayAddr, from, encodedFunction, transactionFee
+                IRelayRecipient(recipient).preRelayedCall.selector, context
             );
 
             (bool success, bytes memory retData) = recipient.call.gas(preRelayedCallMaxGas)(data);
@@ -367,11 +388,11 @@ contract RelayHub is IRelayHub {
                 revertWithStatus(RelayCallStatus.PreRelayedFailed);
             }
 
-            preReturnValue = abi.decode(retData, (bytes32));
+            preReturnValue = abi.decode(retData, (bytes));
         }
 
         // The actual relayed call is now executed. The sender's address is appended at the end of the transaction data
-        (bool relayedCallSuccess,) = recipient.call.gas(gasLimit)(abi.encodePacked(encodedFunction, from));
+        (bool relayedCallSuccess,) = recipient.call.gas(gasLimit)(encodedFunctionWithFrom);
 
         // Even if the relayed call fails, execution continues
 
@@ -381,7 +402,7 @@ contract RelayHub is IRelayHub {
         {
             bytes memory data = abi.encodeWithSelector(
                 IRelayRecipient(recipient).postRelayedCall.selector,
-                relayAddr, from, encodedFunction, relayedCallSuccess, gasUsed, transactionFee, preReturnValue
+                preReturnValue, relayedCallSuccess, gasUsed
             );
 
             (bool successPost,) = recipient.call.gas(postRelayedCallMaxGas)(data);

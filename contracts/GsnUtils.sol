@@ -8,7 +8,7 @@ library GsnUtils {
      * extract method sig from encoded function call
      */
     function getMethodSig(bytes memory msgData) internal pure returns (bytes4) {
-        return bytes4(bytes32(LibBytes.readUint256(msgData, 0)));
+        return LibBytes.readBytes4(msgData, 0);
     }
 
     /**
